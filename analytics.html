@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Analytics &amp; Deep-Dive — CAT Prep Tracker</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="gate">
+  <div class="gate-card">
+    <h2>Not configured yet</h2>
+    <p>Set <code>CONFIG.API_URL</code> in <code>script.js</code> to your deployed Google Apps Script Web App URL (ending in <code>/exec</code>), then reload this page.</p>
+  </div>
+</div>
+
+<div id="appShell">
+  <div class="app-flex">
+    <aside id="sidebar">
+      <div class="brand">
+        <div class="mark">CP</div>
+        <div>
+          <div class="name">CAT Prep Tracker</div>
+          <div class="sub">LIVE SHEET SYNC</div>
+        </div>
+      </div>
+      <nav id="navlist"></nav>
+      <div class="sidebar-foot">
+        <div class="sync-row"><span class="dot" id="liveDot"></span><span id="syncStatus">Not synced yet</span></div>
+      </div>
+    </aside>
+
+    <div id="backdrop"></div>
+
+    <div class="main">
+      <div class="topbar">
+        <button id="menuBtn" aria-label="Toggle menu">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <div class="titles">
+          <h1 id="pageTitle">Analytics &amp; Deep-Dive</h1>
+          <div class="sub" id="pageSub">PROGRESS TRAJECTORIES</div>
+        </div>
+        <div class="topbar-actions">
+          <button class="btn btn-ghost btn-sm" id="refreshBtn">Refresh</button>
+        </div>
+      </div>
+      <div id="content"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"><span id="toastMsg"></span></div>
+
+<script src="script.js"></script>
+<script>
+/* =====================================================================
+   Dependency-free SVG chart renderer.
+   Renders a small responsive line/area chart straight into a container
+   div (no <canvas>, no Chart.js, no CDN dependency at all).
+===================================================================== */
+function renderSvgChart(containerId, datasets, labels, opts={}){
+  const el = document.getElementById(containerId);
+  if(!el) return;
+
+  const w = 600, h = opts.height || 220;
+  const padL = 36, padR = 12, padT = 12, padB = 24;
+  const plotW = w - padL - padR, plotH = h - padT - padB;
+
+  const hasData = labels.length && datasets.some(d=>d.data.some(v=>v!=null));
+  if(!hasData){
+    el.innerHTML = `<div style="height:${h}px;display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:12px;">No data yet</div>`;
+    return;
+  }
+
+  const allVals = datasets.flatMap(d=>d.data).filter(v=>v!=null);
+  let minY = opts.min !== undefined ? opts.min : Math.min(0, ...allVals);
+  let maxY = opts.max !== undefined ? opts.max : Math.max(...allVals);
+  if(minY === maxY) maxY += 1;
+
+  const xStep = labels.length > 1 ? plotW/(labels.length-1) : 0;
+  const xFor = i => padL + (labels.length>1 ? i*xStep : plotW/2);
+  const yFor = v => padT + plotH - ((v-minY)/(maxY-minY))*plotH;
+  const gridColor = 'rgba(255,255,255,0.06)', fontColor = '#8b909c';
+
+  let grid = '';
+  for(let i=0;i<=4;i++){
+    const gy = padT + (plotH/4)*i;
+    const val = maxY - ((maxY-minY)/4)*i;
+    grid += `<line x1="${padL}" y1="${gy}" x2="${w-padR}" y2="${gy}" stroke="${gridColor}"/>`;
+    grid += `<text x="${padL-6}" y="${gy+3}" text-anchor="end" font-size="9" fill="${fontColor}">${Math.round(val*10)/10}${opts.suffix||''}</text>`;
+  }
+  let xLabels = '';
+  const step = Math.max(1, Math.ceil(labels.length/6));
+  labels.forEach((lab,i)=>{
+    if(i % step !== 0 && i !== labels.length-1) return;
+    xLabels += `<text x="${xFor(i)}" y="${h-6}" text-anchor="middle" font-size="9" fill="${fontColor}">${lab}</text>`;
+  });
+
+  let seriesSvg = '';
+  datasets.forEach(ds=>{
+    const pts = ds.data.map((v,i)=> v==null?null:[xFor(i),yFor(v)]).filter(Boolean);
+    if(!pts.length) return;
+    const line = pts.map((p,i)=>(i===0?'M':'L')+p[0]+','+p[1]).join(' ');
+    if(ds.fill){
+      const area = line + ` L${pts.at(-1)[0]},${padT+plotH} L${pts[0][0]},${padT+plotH} Z`;
+      seriesSvg += `<path d="${area}" fill="${ds.color}" fill-opacity="0.12" stroke="none"/>`;
+    }
+    seriesSvg += `<path d="${line}" fill="none" stroke="${ds.color}" stroke-width="2" stroke-dasharray="${ds.dash?'5,4':'0'}"/>`;
+    if(!ds.dash) pts.forEach(p=> seriesSvg += `<circle cx="${p[0]}" cy="${p[1]}" r="3" fill="${ds.color}"/>`);
+  });
+
+  const legend = opts.legend ? `<div style="display:flex;gap:14px;justify-content:center;margin-top:6px;font-size:11px;color:${fontColor};font-family:'IBM Plex Mono',monospace;">${
+    datasets.map(ds=>`<span style="display:flex;align-items:center;gap:5px;"><span style="width:10px;height:2px;background:${ds.color};display:inline-block;"></span>${ds.label}</span>`).join('')
+  }</div>` : '';
+
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:${h}px;display:block;">${grid}${seriesSvg}${xLabels}</svg>${legend}`;
+}
+
+function renderPage(){
+  const sources = [...new Set(DATA.tests.map(t=>t.sourceLabel))];
+  const areas = ['VARC','DILR','Quant'];
+  let banner = '';
+  if(syncError) banner = `<div class="err-banner"><span>Last sync failed: ${escapeHtml(syncError)}. Showing most recent data.</span><button onclick="refreshAll(true)">Retry</button></div>`;
+
+  document.getElementById('content').innerHTML = banner + `
+    <div class="card">
+      <div class="card-h"><h3>Cracku Analytics &amp; Deep-Dive</h3><span class="tag">PROGRESS TRAJECTORIES</span></div>
+      <div class="hint">Cracku only. Only dates where you actually attempted a section are plotted — days you skipped that section are left out, not treated as zero.</div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Section-wise Score Progress</h3><span class="tag">% OF MAX POSSIBLE SCORE</span></div>
+      <div class="grid3">
+        <div><div class="hint" style="margin-bottom:6px;">Cracku – VARC</div><div class="chart-wrap-sm" id="chartScore_VARC"></div></div>
+        <div><div class="hint" style="margin-bottom:6px;">Cracku – DILR</div><div class="chart-wrap-sm" id="chartScore_DILR"></div></div>
+        <div><div class="hint" style="margin-bottom:6px;">Cracku – Quant</div><div class="chart-wrap-sm" id="chartScore_Quant"></div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Section-wise Accuracy</h3><span class="tag">DAILY VS. AVERAGE</span></div>
+      <div class="grid3">
+        <div><div class="hint" style="margin-bottom:6px;">Cracku – VARC</div><div class="chart-wrap-sm" id="chartAcc_VARC"></div></div>
+        <div><div class="hint" style="margin-bottom:6px;">Cracku – DILR</div><div class="chart-wrap-sm" id="chartAcc_DILR"></div></div>
+        <div><div class="hint" style="margin-bottom:6px;">Cracku – Quant</div><div class="chart-wrap-sm" id="chartAcc_Quant"></div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Filter</h3><span class="tag">SOURCE → AREA → TOPIC</span></div>
+      <div class="filter-row">
+        <select id="fSource"><option value="">All sources</option>${sources.map(s=>`<option value="${s}">${s}</option>`).join('')}</select>
+        <select id="fArea"><option value="">All areas</option>${areas.map(a=>`<option value="${a}">${a}</option>`).join('')}</select>
+        <select id="fTopic"><option value="">All topics</option></select>
+        <button class="btn btn-ghost btn-sm" id="clearFilters">Clear</button>
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="card"><div class="card-h"><h3>Accuracy trajectory</h3></div><div class="chart-wrap" id="chartAccuracy"></div></div>
+      <div class="card"><div class="card-h"><h3>Net score trajectory</h3></div><div class="chart-wrap" id="chartNet"></div></div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Filtered log</h3><span class="tag" id="filteredCount"></span></div>
+      <div class="table-scroll"><table><thead><tr><th>Date</th><th>Source</th><th>Test name</th><th>Area</th><th>Topic</th><th>Duration</th><th>Total</th><th>Correct</th><th>Incorrect</th><th>Net</th><th>Accuracy</th></tr></thead><tbody id="analyticsBody"></tbody></table></div>
+    </div>`;
+
+  initFilters();
+  drawSectionProgressCharts();
+}
+window.renderPage = renderPage;
+
+// Builds this Cracku section's per-date series, using ONLY dates where the section was
+// actually attempted on Cracku — a day with no Cracku entry for this area is skipped
+// entirely, never zeroed.
+function sectionProgressSeries(area){
+  const byDate = {};
+  DATA.tests.filter(t=>t.sourceLabel==='Cracku' && t.area===area).forEach(t=>{
+    if(!byDate[t.date]) byDate[t.date] = { netScore:0, maxScore:0, correct:0, answered:0 };
+    byDate[t.date].netScore += Number(t.netScore||0);
+    byDate[t.date].maxScore += Number(t.totalQuestions||0) * Number(t.marksPerCorrect||0);
+    byDate[t.date].correct += Number(t.correct||0);
+    byDate[t.date].answered += Number(t.answered||0);
+  });
+  const dates = Object.keys(byDate).sort();
+
+  const scorePoints = [];
+  dates.forEach(d=>{
+    const v = byDate[d];
+    if(v.maxScore > 0) scorePoints.push({ date:d, value: round1((v.netScore/v.maxScore)*100) });
+  });
+
+  const accPoints = [];
+  dates.forEach(d=>{
+    const v = byDate[d];
+    if(v.answered > 0) accPoints.push({ date:d, value: round1((v.correct/v.answered)*100) });
+  });
+  const avgAcc = accPoints.length ? round1(accPoints.reduce((s,p)=>s+p.value,0)/accPoints.length) : 0;
+
+  return { scorePoints, accPoints, avgAcc };
+}
+
+function drawSectionProgressCharts(){
+  ['VARC','DILR','Quant'].forEach(area=>{
+    const { scorePoints, accPoints, avgAcc } = sectionProgressSeries(area);
+
+    renderSvgChart('chartScore_'+area,
+      [{ data: scorePoints.map(p=>p.value), color:'#d4a24c', fill:true }],
+      scorePoints.map(p=>fmtDate(p.date)),
+      { height:170 });
+
+    renderSvgChart('chartAcc_'+area,
+      [
+        { label:'Daily accuracy', data: accPoints.map(p=>p.value), color:'#45b8ad', fill:true },
+        { label:'Average', data: accPoints.map(()=>avgAcc), color:'#5b8def', dash:true }
+      ],
+      accPoints.map(p=>fmtDate(p.date)),
+      { height:170, legend:true, min:0, max:100, suffix:'%' });
+  });
+}
+
+function initFilters(){
+  const fSource = document.getElementById('fSource');
+  const fArea = document.getElementById('fArea');
+  const fTopic = document.getElementById('fTopic');
+  function currentFilters(){ return {source:fSource.value, area:fArea.value, topic:fTopic.value}; }
+  function applyFilters(){
+    const f = currentFilters();
+    let rows = [...DATA.tests];
+    if(f.source) rows = rows.filter(t=>t.sourceLabel===f.source);
+    if(f.area) rows = rows.filter(t=>t.area===f.area);
+    if(f.topic) rows = rows.filter(t=>t.topic===f.topic);
+    rows.sort((a,b)=>a.date.localeCompare(b.date));
+    return rows;
+  }
+  function refreshTopics(){
+    const f = currentFilters();
+    let base = [...DATA.tests];
+    if(f.source) base = base.filter(t=>t.sourceLabel===f.source);
+    if(f.area) base = base.filter(t=>t.area===f.area);
+    const topics = [...new Set(base.map(t=>t.topic))];
+    fTopic.innerHTML = `<option value="">All topics</option>` + topics.map(t=>`<option value="${t}">${t}</option>`).join('');
+  }
+  function refreshView(){
+    refreshTopics();
+    const rows = applyFilters();
+    document.getElementById('filteredCount').textContent = rows.length + ' ENTRIES';
+    document.getElementById('analyticsBody').innerHTML = rows.length ? rows.map(t=>`
+      <tr><td>${fmtDate(t.date)}</td><td><span class="tag-pill">${t.sourceLabel}</span></td>
+      <td style="white-space:normal;max-width:180px;">${escapeHtml(t.testName)||'—'}</td><td>${t.area}</td>
+      <td style="white-space:normal;max-width:200px;">${escapeHtml(t.topic)}</td><td class="num">${t.duration}m</td>
+      <td class="num">${t.totalQuestions}</td><td class="num">${t.correct}</td><td class="num">${t.incorrect}</td>
+      <td class="num">${t.netScore}</td><td class="num">${t.accuracy}%</td></tr>`).join('') : `<tr><td colspan="11" class="empty">No entries match this filter.</td></tr>`;
+    drawCharts(rows);
+  }
+  fSource.addEventListener('change', refreshView);
+  fArea.addEventListener('change', refreshView);
+  fTopic.addEventListener('change', refreshView);
+  document.getElementById('clearFilters').addEventListener('click',()=>{ fSource.value=''; fArea.value=''; refreshView(); });
+  refreshView();
+}
+
+function drawCharts(rows){
+  const labels = rows.map(t=>fmtDate(t.date));
+  const acc = rows.map(t=>t.accuracy);
+  const net = rows.map(t=>t.netScore);
+
+  renderSvgChart('chartAccuracy',
+    [{ data: acc, color:'#45b8ad', fill:true }],
+    labels,
+    { height:260, min:0, max:100, suffix:'%' });
+
+  renderSvgChart('chartNet',
+    [{ data: net, color:'#d4a24c', fill:true }],
+    labels,
+    { height:260 });
+}
+
+document.addEventListener('DOMContentLoaded', ()=>{ bootPage(); });
+</script>
+</body>
+</html>

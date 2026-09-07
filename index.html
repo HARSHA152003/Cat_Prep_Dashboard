@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard — CAT Prep Tracker</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="gate">
+  <div class="gate-card">
+    <h2>Not configured yet</h2>
+    <p>Set <code>CONFIG.API_URL</code> in <code>script.js</code> to your deployed Google Apps Script Web App URL (ending in <code>/exec</code>), then reload this page.</p>
+  </div>
+</div>
+
+<div id="appShell">
+  <div class="app-flex">
+    <aside id="sidebar">
+      <div class="brand">
+        <div class="mark">CP</div>
+        <div>
+          <div class="name">CAT Prep Tracker</div>
+          <div class="sub">LIVE SHEET SYNC</div>
+        </div>
+      </div>
+      <nav id="navlist"></nav>
+      <div class="sidebar-foot">
+        <div class="sync-row"><span class="dot" id="liveDot"></span><span id="syncStatus">Not synced yet</span></div>
+      </div>
+    </aside>
+
+    <div id="backdrop"></div>
+
+    <div class="main">
+      <div class="topbar">
+        <button id="menuBtn" aria-label="Toggle menu">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <div class="titles">
+          <h1 id="pageTitle">Dashboard</h1>
+          <div class="sub" id="pageSub">MISSION CONTROL</div>
+        </div>
+        <div class="topbar-actions">
+          <button class="btn btn-ghost btn-sm" id="refreshBtn">Refresh</button>
+        </div>
+      </div>
+      <div id="content"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"><span id="toastMsg"></span></div>
+
+<script src="script.js"></script>
+<script>
+// Shared calc used by both the 4-box KPI glance and the detailed tables below,
+// so the two can be placed in different parts of the page without duplicating logic.
+function timeSpentData(){
+  const crackuByArea = crackuTimeByArea();       // minutes
+  const iimByArea = iimTimeByArea();             // minutes
+  const studyByAreaHrs = studyHoursByArea();     // hours
+  const conceptTotalHours = round1(DATA.study.reduce((s,x)=>s+Number(x.hours||0),0));
+  const mocksTaken = (mockRecordsCache||[]).length;
+  const mockMinutes = mocksTaken * 120; // fixed 2-hour mock length
+  const readingMinutes = DATA.reading.reduce((s,r)=>s+Number(r.minutes||0),0);
+  const testsMinutes = DATA.tests.reduce((s,t)=>s+Number(t.duration||0),0);
+  const grandTotalHours = round1((testsMinutes + conceptTotalHours*60 + mockMinutes + readingMinutes) / 60);
+
+  const perSectionTotals = {};
+  ['VARC','DILR','Quant'].forEach(a=>{
+    perSectionTotals[a] = (crackuByArea[a]||0) + (iimByArea[a]||0) + (studyByAreaHrs[a]||0)*60;
+  });
+
+  return { crackuByArea, iimByArea, studyByAreaHrs, conceptTotalHours, mocksTaken, mockMinutes, grandTotalHours, perSectionTotals };
+}
+
+// The 4-box glance — shown near the top of the page.
+function renderTimeSpentKPIs(){
+  const { grandTotalHours, mocksTaken, mockMinutes, conceptTotalHours } = timeSpentData();
+  return `
+    <div class="card-h" style="margin-top:26px;"><h3>Overall Time Spent</h3><span class="tag">ALL LOGGED ACTIVITY</span></div>
+    <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);">
+      <div class="kpi"><div class="label">Total time (all activities)</div><div class="value">${grandTotalHours}<span class="unit">hrs</span></div></div>
+      <div class="kpi"><div class="label">Mocks taken</div><div class="value">${mocksTaken}</div></div>
+      <div class="kpi"><div class="label">Mock time spent</div><div class="value">${round1(mockMinutes/60)}<span class="unit">hrs</span></div></div>
+      <div class="kpi"><div class="label">Concept study hours</div><div class="value">${conceptTotalHours}<span class="unit">hrs</span></div></div>
+    </div>`;
+}
+
+// The detailed breakdown tables — deepest level of detail, shown further down the page.
+function renderTimeSpentDetails(){
+  const { crackuByArea, iimByArea, studyByAreaHrs, perSectionTotals } = timeSpentData();
+
+  function areaMinutesTable(byAreaMins){
+    return `<div class="table-scroll"><table><thead><tr><th>Section</th><th>Time</th></tr></thead><tbody>
+      ${['VARC','DILR','Quant'].map(a=>`<tr><td>${a}</td><td class="num">${fmtMinsHrs(byAreaMins[a]||0)}</td></tr>`).join('')}
+    </tbody></table></div>`;
+  }
+  function areaHoursTable(byAreaHrs){
+    return `<div class="table-scroll"><table><thead><tr><th>Section</th><th>Hours</th></tr></thead><tbody>
+      ${['VARC','DILR','Quant'].map(a=>`<tr><td>${a}</td><td class="num">${round1(byAreaHrs[a]||0)}h</td></tr>`).join('')}
+    </tbody></table></div>`;
+  }
+
+  return `
+    <div class="card-h" style="margin-top:26px;"><h3>Time Spent — Breakdown</h3><span class="tag">BY SOURCE &amp; SECTION</span></div>
+    <div class="grid3" style="margin-bottom:16px;">
+      <div class="card">
+        <div class="card-h"><h3>Cracku — section-wise time</h3></div>
+        ${areaMinutesTable(crackuByArea)}
+      </div>
+      <div class="card">
+        <div class="card-h"><h3>2IIM — section-wise time</h3></div>
+        ${areaMinutesTable(iimByArea)}
+      </div>
+      <div class="card">
+        <div class="card-h"><h3>Concept study — hours per section</h3></div>
+        ${areaHoursTable(studyByAreaHrs)}
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Time spent per section</h3><span class="tag">EXCLUDES MOCK &amp; LEISURE READING</span></div>
+      ${areaMinutesTable(perSectionTotals)}
+    </div>`;
+}
+
+function renderSectionPerformance(){
+  const areas = ['VARC','DILR','Quant'];
+  const widgets = areas.map(area=>{
+    const stat = weightedAvgForArea(area);
+    const trend = trendForArea(area, Infinity); // Infinity -> compares first half vs second half of the ENTIRE history, not just the last 5
+    const arrow = trend.dir==='up' ? '▲' : (trend.dir==='down' ? '▼' : '•');
+    const pct = stat ? Math.min(100, Math.max(0, stat.avgAccuracy)) : 0;
+    const barColor = area==='VARC' ? 'var(--blue)' : area==='DILR' ? 'var(--gold)' : 'var(--teal)';
+    return `
+      <div class="section-widget">
+        <div class="sw-head"><span class="name">${area}</span><span class="delta ${trend.dir}">${arrow} ${trend.dir==='flat'?'stable':Math.abs(trend.delta)+'%'}</span></div>
+        <div class="sw-score">${stat? stat.avgAccuracy+'%' : '—'} <span style="font-size:12px;color:var(--faint);font-weight:400;">accuracy</span></div>
+        <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${barColor};"></div></div>
+        <div class="hint">${stat ? stat.testCount+' test(s)'+(stat.mockCount? ' + '+stat.mockCount+' mock(s)':'')+(stat.avgNetPct!==null? ' · avg score '+stat.avgNetPct+'% of max' : '') : 'No tests logged yet'}</div>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="card-h" style="margin-top:26px;"><h3>Section-wise performance</h3><span class="tag">WEIGHTED AVG · TREND OVERALL</span></div>
+    <div class="hint" style="margin-bottom:10px;">Accuracy, trend, and avg score % include full-length mock scores from the separate Mock Analytics page/sheet, normalized against the standard CAT max (VARC 72 / DILR 66 / QA 66).</div>
+    <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);">${widgets}</div>`;
+}
+
+function renderRecentTests(){
+  const recentTests = [...DATA.tests].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,6);
+  const recentRows = recentTests.length ? recentTests.map(t=>`
+    <tr><td>${fmtDate(t.date)}</td><td><span class="tag-pill">${t.sourceLabel}</span></td><td>${t.area}</td>
+    <td>${escapeHtml(t.testName) || escapeHtml(t.topic) || '—'}</td>
+    <td class="num">${t.netScore}</td><td class="num">${t.accuracy}%</td></tr>`).join('')
+    : `<tr><td colspan="6" class="empty">No tests logged yet — head to the Test &amp; Target Tracker page.</td></tr>`;
+
+  return `
+    <div class="card" style="margin-top:16px;">
+      <div class="card-h"><h3>Recent tests</h3><span class="tag">LAST 6 ENTRIES</span></div>
+      <div class="table-scroll"><table><thead><tr><th>Date</th><th>Source</th><th>Area</th><th>Test / Topic</th><th>Net score</th><th>Accuracy</th></tr></thead><tbody>${recentRows}</tbody></table></div>
+    </div>`;
+}
+
+function renderDashboard(){
+  const totalHours = round1(DATA.study.reduce((s,x)=>s+Number(x.hours||0),0));
+  const totalTests = DATA.tests.length;
+  const totalPages = DATA.reading.reduce((s,x)=>s+Number(x.pages||0),0);
+  const vocabCount = DATA.vocab.length;
+
+  let banner = '';
+  if(syncError) banner = `<div class="err-banner"><span>Last sync failed: ${escapeHtml(syncError)}. Showing most recent data.</span><button onclick="refreshAll(true)">Retry</button></div>`;
+
+  document.getElementById('content').innerHTML = banner + `
+    ${renderTimeSpentKPIs()}
+    <div class="kpi-grid" style="margin-top:26px;">
+      <div class="kpi"><div class="label">Total concept study hours</div><div class="value">${totalHours}<span class="unit">hrs</span></div><div class="ticks">${tickRow(totalHours,200)}</div></div>
+      <div class="kpi"><div class="label">Tests &amp; targets logged</div><div class="value">${totalTests}</div><div class="ticks">${tickRow(totalTests,50)}</div></div>
+      <div class="kpi"><div class="label">Total pages read</div><div class="value">${totalPages}<span class="unit">pg</span></div><div class="ticks">${tickRow(totalPages,1000)}</div></div>
+      <div class="kpi"><div class="label">Vocabulary bank size</div><div class="value">${vocabCount}<span class="unit">words</span></div><div class="ticks">${tickRow(vocabCount,150)}</div></div>
+    </div>
+    ${renderSectionPerformance()}
+    ${renderTimeSpentDetails()}
+    ${renderRecentTests()}`;
+}
+
+window.renderPage = renderDashboard;
+document.addEventListener('DOMContentLoaded', ()=>{ bootPage(); });
+</script>
+</body>
+</html>

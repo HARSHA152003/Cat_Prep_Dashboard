@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Test & Target Tracker — CAT Prep Tracker</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="gate">
+  <div class="gate-card">
+    <h2>Not configured yet</h2>
+    <p>Set <code>CONFIG.API_URL</code> in <code>script.js</code> to your deployed Google Apps Script Web App URL (ending in <code>/exec</code>), then reload this page.</p>
+  </div>
+</div>
+
+<div id="appShell">
+  <div class="app-flex">
+    <aside id="sidebar">
+      <div class="brand">
+        <div class="mark">CP</div>
+        <div>
+          <div class="name">CAT Prep Tracker</div>
+          <div class="sub">LIVE SHEET SYNC</div>
+        </div>
+      </div>
+      <nav id="navlist"></nav>
+      <div class="sidebar-foot">
+        <div class="sync-row"><span class="dot" id="liveDot"></span><span id="syncStatus">Not synced yet</span></div>
+      </div>
+    </aside>
+
+    <div id="backdrop"></div>
+
+    <div class="main">
+      <div class="topbar">
+        <button id="menuBtn" aria-label="Toggle menu">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <div class="titles">
+          <h1 id="pageTitle">Test &amp; Target Tracker</h1>
+          <div class="sub" id="pageSub">CORE DATA ENTRY ENGINE</div>
+        </div>
+        <div class="topbar-actions">
+          <button class="btn btn-ghost btn-sm" id="refreshBtn">Refresh</button>
+        </div>
+      </div>
+      <div id="content"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"><span id="toastMsg"></span></div>
+
+<script src="script.js"></script>
+<script>
+/* =====================================================================
+   Source-specific config
+===================================================================== */
+const CRACKU_TOPICS = {
+  VARC:['RC', 'NON-RC'],
+  Quant:['Arithmetic','Number Theory','Algebra','Modern Maths','Geometry & Mensuration','Others'],
+  DILR:['Data Interpretation Sets','Logical Reasoning Sets','Games & Tournaments','Others'],
+};
+const IIM_ADVANCED_MAP = {
+  Quant:['Arithmetic — Advanced','Algebra — Advanced','Number Theory — Advanced','Geometry — Advanced','Modern Maths — Advanced'],
+  VARC:['RC — Advanced Inference','Verbal Ability — Advanced'],
+  DILR:['DI Sets — Advanced','LR Sets — Advanced'],
+};
+
+function freshTrackerState(){
+  return {
+    source: null, craSections: {VARC:false, DILR:false, Quant:false},
+    craTopic: {}, craCustomTopic: {}, craDuration: {VARC:15, DILR:20, Quant:20}, craScores: {}, iimArea: 'Quant',
+  };
+}
+let trackerState = freshTrackerState();
+
+// Each Cracku section gets its own scoring — no universal block copied to every section.
+function craScoreFor(sec){
+  if(!trackerState.craScores[sec]) trackerState.craScores[sec] = {total:0, answered:0, unanswered:0, correct:0, incorrect:0, marksPerCorrect:3, penaltyPerIncorrect:1, finalScore:0};
+  return trackerState.craScores[sec];
+}
+
+/* =====================================================================
+   RENDER
+===================================================================== */
+function renderPage(){
+  let banner = '';
+  if(syncError) banner = `<div class="err-banner"><span>Last sync failed: ${escapeHtml(syncError)}. Showing most recent data.</span><button onclick="refreshAll(true)">Retry</button></div>`;
+  document.getElementById('content').innerHTML = banner + `
+  <div class="card">
+    <div class="card-h"><h3>Step 1 — Select source</h3><span class="tag">TEST &amp; TARGET TRACKER</span></div>
+    <div class="source-cards" id="sourceCards">
+      ${sourceCard('cracku','Cracku Daily Target','Flexible sectional practice, log only what you attempted today.')}
+      ${sourceCard('iim_sectional','2IIM Sectional Test','Overall sectional test — fixed 4×3 / 40m structure. Needs a test name.')}
+      ${sourceCard('iim_advanced','2IIM Advanced Concept','Granular area → module mapping. Needs a test name.')}
+    </div>
+  </div>
+  <div class="card" id="stepArea" style="display:none;"></div>`;
+  initSourceCards();
+  if(trackerState.source) renderStepArea();
+}
+window.renderPage = renderPage;
+
+function sourceCard(id,title,desc){
+  return `<button type="button" class="source-card ${trackerState.source===id?'active':''}" data-src="${id}"><div class="t">${title}</div><div class="d">${desc}</div></button>`;
+}
+function initSourceCards(){
+  document.querySelectorAll('#sourceCards .source-card').forEach(el=>{
+    el.addEventListener('click',()=>{
+      trackerState.source = el.dataset.src;
+      document.querySelectorAll('#sourceCards .source-card').forEach(c=>c.classList.remove('active'));
+      el.classList.add('active');
+      renderStepArea();
+    });
+  });
+}
+function renderStepArea(){
+  const wrap = document.getElementById('stepArea');
+  wrap.style.display = 'block';
+  const s = trackerState.source;
+  const stepsTrack = `
+    <div class="steps-track">
+      <div class="step-dot on"><span class="circ">1</span> Source</div><div class="step-line"></div>
+      <div class="step-dot on"><span class="circ">2</span> Details</div><div class="step-line"></div>
+      <div class="step-dot on"><span class="circ">3</span> Score</div>
+    </div>`;
+  let sub = '';
+  if(s==='cracku') sub = craSubForm(); // per-section scoring is built into this
+  else if(s==='iim_sectional') sub = iimSectionalForm() + scoringBlock();
+  else if(s==='iim_advanced') sub = iimAdvancedForm() + scoringBlock();
+  wrap.innerHTML = `
+    <div class="card-h"><h3>Step 2 &amp; 3 — Details and scoring</h3><span class="tag">${s.toUpperCase()}</span></div>
+    ${stepsTrack}
+    <form id="trackerForm">${sub}
+      <div style="margin-top:18px;display:flex;gap:10px;">
+        <button type="submit" class="btn btn-gold" id="trackerSubmitBtn">Save entry</button>
+        <button type="button" id="cancelEntry" class="btn btn-ghost">Reset</button>
+      </div>
+    </form>`;
+  bindDynamicForm();
+}
+function craSubForm(){
+  const sections = ['VARC','DILR','Quant'];
+  return `
+    <div class="field">
+      <label class="field-label">Which sections did you attempt today?</label>
+      <div class="chip-row" id="craSectionChips">
+        ${sections.map(sec=>`<label class="chip ${trackerState.craSections[sec]?'checked':''}" data-sec="${sec}"><input type="checkbox" ${trackerState.craSections[sec]?'checked':''} data-sec-cb="${sec}"> ${sec}</label>`).join('')}
+      </div>
+      <div class="hint">Only check what you actually completed — no mandatory placeholders. Cracku practice isn't a single named test, so no name field here.</div>
+    </div>
+    <div id="craPerSection">${craPerSectionBlocks()}</div>
+    <div class="field"><label class="field-label">Date</label><input type="date" id="craDate" value="${todayISO()}"></div>`;
+}
+function craPerSectionBlocks(){
+  return Object.keys(trackerState.craSections).filter(s=>trackerState.craSections[s]).map(sec=>{
+    const topics = CRACKU_TOPICS[sec];
+    const customVisible = trackerState.craTopic[sec]==='Others';
+    const sv = craScoreFor(sec);
+    return `
+      <div class="sec-score-card">
+        <div class="sec-score-head">${sec} — its own topic, timing &amp; scoring</div>
+        <div class="grid3" style="margin-bottom:10px;">
+          <div class="field" style="margin-bottom:0;">
+            <label class="field-label">Topic / module</label>
+            <select data-cra-topic="${sec}"><option value="">Select topic</option>${topics.map(t=>`<option value="${t}" ${trackerState.craTopic[sec]===t?'selected':''}>${t}</option>`).join('')}</select>
+            ${customVisible?`<input type="text" placeholder="Custom topic" style="margin-top:8px;" data-cra-custom="${sec}" value="${trackerState.craCustomTopic[sec]||''}">`:''}
+          </div>
+          <div class="field" style="margin-bottom:0;"><label class="field-label">Duration (mins)</label><input type="number" min="0" step="0.5" data-cra-dur="${sec}" value="${trackerState.craDuration[sec]}"></div>
+        </div>
+        <div class="grid5">
+          <div class="field" style="margin-bottom:0;"><label class="field-label">Total Qs</label><input type="number" min="0" data-cra-score="${sec}:total" value="${sv.total||''}"></div>
+          <div class="field" style="margin-bottom:0;"><label class="field-label">Answered</label><input type="number" min="0" data-cra-score="${sec}:answered" value="${sv.answered||''}"></div>
+          <div class="field" style="margin-bottom:0;"><label class="field-label">Unanswered</label><input type="number" min="0" data-cra-score="${sec}:unanswered" value="${sv.unanswered||''}"></div>
+          <div class="field" style="margin-bottom:0;"><label class="field-label">Correct</label><input type="number" min="0" data-cra-score="${sec}:correct" value="${sv.correct||''}"></div>
+          <div class="field" style="margin-bottom:0;"><label class="field-label">Incorrect</label><input type="number" min="0" data-cra-score="${sec}:incorrect" value="${sv.incorrect||''}"></div>
+        </div>
+        <div class="grid2" style="margin-top:12px;">
+          <div class="field" style="margin-bottom:0;"><label class="field-label">Marks per correct <span style="color:var(--faint);">(reference only)</span></label><input type="number" step="0.5" data-cra-score="${sec}:marksPerCorrect" value="${sv.marksPerCorrect}"></div>
+          <div class="field" style="margin-bottom:0;"><label class="field-label">Penalty per incorrect <span style="color:var(--faint);">(reference only)</span></label><input type="number" step="0.25" data-cra-score="${sec}:penaltyPerIncorrect" value="${sv.penaltyPerIncorrect}"></div>
+        </div>
+        <div class="validation-msg" id="craValidation_${sec}"></div>
+        <div class="grid2" style="margin-top:12px;">
+          <div class="field" style="margin-bottom:0;"><label class="field-label">Final score (manual entry — negative allowed)</label><input type="number" step="0.01" data-cra-score="${sec}:finalScore" value="${sv.finalScore ?? 0}" placeholder="e.g. -2 or 18"></div>
+          <div class="field" style="margin-bottom:0;display:flex;flex-direction:column;justify-content:flex-end;"><label class="field-label">Accuracy</label><div class="v" id="craAcc_${sec}" style="font-family:var(--font-mono);font-size:20px;font-weight:600;">0%</div></div>
+        </div>
+      </div>`;
+  }).join('') || `<div class="hint" style="margin-bottom:10px;">Select at least one section above to continue.</div>`;
+}
+function updateCraSectionCalc(sec){
+  const sv = craScoreFor(sec);
+  const acc = sv.answered>0 ? round1((sv.correct/sv.answered)*100) : 0;
+  const accEl = document.getElementById('craAcc_'+sec);
+  if(accEl){ accEl.textContent = acc+'%'; }
+  const msgEl = document.getElementById('craValidation_'+sec);
+  if(!msgEl) return;
+  let msgs = [];
+  if(sv.total>0 && (sv.answered+sv.unanswered)!==sv.total) msgs.push(`Answered + Unanswered (${sv.answered+sv.unanswered}) ≠ Total (${sv.total})`);
+  if(sv.answered>0 && (sv.correct+sv.incorrect)!==sv.answered) msgs.push(`Correct + Incorrect (${sv.correct+sv.incorrect}) ≠ Answered (${sv.answered})`);
+  if(msgs.length){ msgEl.textContent = '⚠ '+msgs.join('  ·  '); msgEl.className='validation-msg err'; }
+  else if(sv.total>0){ msgEl.textContent = '✓ Question breakdown checks out'; msgEl.className='validation-msg ok'; }
+  else { msgEl.textContent=''; }
+}
+function iimSectionalForm(){
+  return `
+    <div class="card" style="background:var(--bg);border-style:dashed;margin-bottom:16px;">
+      <strong style="font-size:13px;">Structure locked:</strong> <span style="color:var(--muted);font-size:13px;"> 4 sections × 3 areas / 40 minutes overall sectional format.</span>
+    </div>
+    <div class="field"><label class="field-label">Test name</label><input type="text" id="iimSecName" placeholder="e.g. 2IIM SecTest 14 — VARC"></div>
+    <div class="grid3">
+      <div class="field"><label class="field-label">Primary area tested</label><select id="iimSecArea"><option value="VARC">VARC</option><option value="DILR">DILR</option><option value="Quant">Quant</option></select></div>
+      <div class="field"><label class="field-label">Duration (mins)</label><input type="number" id="iimSecDuration" value="40" min="0" step="0.5"></div>
+      <div class="field"><label class="field-label">Date</label><input type="date" id="iimSecDate" value="${todayISO()}"></div>
+    </div>`;
+}
+function iimAdvancedForm(){
+  const area = trackerState.iimArea;
+  const modules = IIM_ADVANCED_MAP[area];
+  return `
+    <div class="field"><label class="field-label">Test name</label><input type="text" id="iimAdvName" placeholder="e.g. 2IIM Advanced Quant — Set 3"></div>
+    <div class="grid3">
+      <div class="field"><label class="field-label">Broad area</label><select id="iimAdvArea">${Object.keys(IIM_ADVANCED_MAP).map(a=>`<option value="${a}" ${area===a?'selected':''}>${a}</option>`).join('')}</select></div>
+      <div class="field"><label class="field-label">Specific module</label><select id="iimAdvModule">${modules.map(m=>`<option value="${m}">${m}</option>`).join('')}</select></div>
+      <div class="field"><label class="field-label">Duration (mins)</label><input type="number" id="iimAdvDuration" value="35" min="0" step="0.5"></div>
+    </div>
+    <div class="field" style="max-width:220px;"><label class="field-label">Date</label><input type="date" id="iimAdvDate" value="${todayISO()}"></div>`;
+}
+function scoringBlock(){
+  return `
+    <div class="card-h" style="margin-top:8px;"><h3>Universal scoring &amp; question breakdown</h3></div>
+    <div class="grid5">
+      <div class="field"><label class="field-label">Total questions</label><input type="number" id="q_total" min="0"></div>
+      <div class="field"><label class="field-label">Answered</label><input type="number" id="q_answered" min="0"></div>
+      <div class="field"><label class="field-label">Unanswered</label><input type="number" id="q_unanswered" min="0"></div>
+      <div class="field"><label class="field-label">Correct</label><input type="number" id="q_correct" min="0"></div>
+      <div class="field"><label class="field-label">Incorrect</label><input type="number" id="q_incorrect" min="0"></div>
+    </div>
+    <div class="grid2">
+      <div class="field"><label class="field-label">Marks per correct <span style="color:var(--faint);">(reference only)</span></label><input type="number" id="marks_correct" value="3" step="0.5"></div>
+      <div class="field"><label class="field-label">Penalty per incorrect <span style="color:var(--faint);">(reference only)</span></label><input type="number" id="penalty_incorrect" value="1" step="0.25"></div>
+    </div>
+    <div id="validationMsg" class="validation-msg"></div>
+    <div class="grid2">
+      <div class="field"><label class="field-label">Final score (manual entry — negative allowed)</label><input type="number" id="finalScore" step="0.01" value="0" placeholder="e.g. -2 or 18"></div>
+      <div class="field" style="display:flex;flex-direction:column;justify-content:flex-end;"><label class="field-label">Accuracy</label><div class="v" id="calcAcc" style="font-family:var(--font-mono);font-size:20px;font-weight:600;">0%</div></div>
+    </div>`;
+}
+function bindDynamicForm(){
+  document.querySelectorAll('[data-sec-cb]').forEach(cb=>cb.addEventListener('change',()=>{ trackerState.craSections[cb.dataset.secCb] = cb.checked; renderStepArea(); }));
+  document.querySelectorAll('[data-cra-topic]').forEach(sel=>sel.addEventListener('change',()=>{ trackerState.craTopic[sel.dataset.craTopic] = sel.value; renderStepArea(); }));
+  document.querySelectorAll('[data-cra-custom]').forEach(inp=>inp.addEventListener('input',()=>{ trackerState.craCustomTopic[inp.dataset.craCustom] = inp.value; }));
+  document.querySelectorAll('[data-cra-dur]').forEach(inp=>inp.addEventListener('input',()=>{ trackerState.craDuration[inp.dataset.craDur] = Number(inp.value); }));
+  document.querySelectorAll('[data-cra-score]').forEach(inp=>{
+    inp.addEventListener('input', ()=>{
+      const [sec, field] = inp.dataset.craScore.split(':');
+      craScoreFor(sec)[field] = Number(inp.value)||0;
+      updateCraSectionCalc(sec);
+    });
+  });
+  const iimAdvArea = document.getElementById('iimAdvArea');
+  if(iimAdvArea) iimAdvArea.addEventListener('change',()=>{ trackerState.iimArea = iimAdvArea.value; renderStepArea(); });
+  ['q_total','q_answered','q_unanswered','q_correct','q_incorrect','marks_correct','penalty_incorrect','finalScore'].forEach(id=>{
+    const el = document.getElementById(id); if(el) el.addEventListener('input', updateCalc);
+  });
+  updateCalc();
+  if(trackerState.source==='cracku'){
+    Object.keys(trackerState.craSections).filter(k=>trackerState.craSections[k]).forEach(updateCraSectionCalc);
+  }
+  document.getElementById('cancelEntry').addEventListener('click',()=>{
+    trackerState = { ...freshTrackerState(), source: trackerState.source };
+    renderStepArea();
+  });
+  document.getElementById('trackerForm').addEventListener('submit', onSubmitTracker);
+}
+function updateCalc(){
+  const total = Number(document.getElementById('q_total')?.value||0);
+  const answered = Number(document.getElementById('q_answered')?.value||0);
+  const unanswered = Number(document.getElementById('q_unanswered')?.value||0);
+  const correct = Number(document.getElementById('q_correct')?.value||0);
+  const incorrect = Number(document.getElementById('q_incorrect')?.value||0);
+  const acc = answered>0 ? round1((correct/answered)*100) : 0;
+  const accEl = document.getElementById('calcAcc');
+  if(accEl) accEl.textContent = acc+'%';
+  const msgEl = document.getElementById('validationMsg');
+  if(!msgEl) return;
+  let msgs = [];
+  if(total>0 && (answered+unanswered) !== total) msgs.push(`Answered + Unanswered (${answered+unanswered}) ≠ Total (${total})`);
+  if(answered>0 && (correct+incorrect) !== answered) msgs.push(`Correct + Incorrect (${correct+incorrect}) ≠ Answered (${answered})`);
+  if(msgs.length){ msgEl.textContent = '⚠ '+msgs.join('  ·  '); msgEl.className='validation-msg err'; }
+  else if(total>0){ msgEl.textContent = '✓ Question breakdown checks out'; msgEl.className='validation-msg ok'; }
+  else { msgEl.textContent=''; }
+}
+async function onSubmitTracker(e){
+  e.preventDefault();
+  const s = trackerState.source;
+  let entriesToAdd = [];
+
+  if(s==='cracku'){
+    const activeSecs = Object.keys(trackerState.craSections).filter(k=>trackerState.craSections[k]);
+    if(!activeSecs.length){ toast('Select at least one section', true); return; }
+    const date = document.getElementById('craDate').value || todayISO();
+    for(const sec of activeSecs){
+      const sv = craScoreFor(sec);
+      if(sv.total<=0){ toast(`Enter total questions for ${sec}`, true); return; }
+      if((sv.answered+sv.unanswered)!==sv.total){ toast(`${sec}: Answered + Unanswered must equal Total`, true); return; }
+      if((sv.correct+sv.incorrect)!==sv.answered){ toast(`${sec}: Correct + Incorrect must equal Answered`, true); return; }
+    }
+    activeSecs.forEach(sec=>{
+      let topic = trackerState.craTopic[sec] || '';
+      if(topic==='Others') topic = trackerState.craCustomTopic[sec] || 'Others (unspecified)';
+      const sv = craScoreFor(sec);
+      entriesToAdd.push({ targetSheet:'Test_And_Targets_Log', date, sourceType:'Cracku Daily Target', sourceLabel:'Cracku', testName:'', area: sec, topic: topic||'—', duration: trackerState.craDuration[sec]||0, totalQuestions: sv.total, answered: sv.answered, unanswered: sv.unanswered, correct: sv.correct, incorrect: sv.incorrect, marksPerCorrect: sv.marksPerCorrect, penaltyPerIncorrect: sv.penaltyPerIncorrect, netScore: Number(sv.finalScore)||0 });
+    });
+  } else if(s==='iim_sectional' || s==='iim_advanced'){
+    const total = Number(document.getElementById('q_total').value||0);
+    const answered = Number(document.getElementById('q_answered').value||0);
+    const unanswered = Number(document.getElementById('q_unanswered').value||0);
+    const correct = Number(document.getElementById('q_correct').value||0);
+    const incorrect = Number(document.getElementById('q_incorrect').value||0);
+    const mc = Number(document.getElementById('marks_correct').value||0);
+    const pi = Number(document.getElementById('penalty_incorrect').value||0);
+    const finalScore = Number(document.getElementById('finalScore').value||0);
+    if(total>0 && (answered+unanswered)!==total){ toast('Fix: Answered + Unanswered must equal Total', true); return; }
+    if(answered>0 && (correct+incorrect)!==answered){ toast('Fix: Correct + Incorrect must equal Answered', true); return; }
+    if(total<=0){ toast('Enter total questions before saving', true); return; }
+
+    if(s==='iim_sectional'){
+      const testName = document.getElementById('iimSecName').value.trim();
+      if(!testName){ toast('Enter a test name for this 2IIM Sectional Test', true); return; }
+      const area = document.getElementById('iimSecArea').value;
+      const date = document.getElementById('iimSecDate').value || todayISO();
+      const duration = Number(document.getElementById('iimSecDuration').value||40);
+      entriesToAdd.push({ targetSheet:'Test_And_Targets_Log', date, sourceType:'2IIM Sectional Test (4x3/40m)', sourceLabel:'2IIM Sectional', testName, area, topic:'Overall Sectional', duration, totalQuestions:total, answered, unanswered, correct, incorrect, marksPerCorrect: mc, penaltyPerIncorrect: pi, netScore: finalScore });
+    } else {
+      const testName = document.getElementById('iimAdvName').value.trim();
+      if(!testName){ toast('Enter a test name for this 2IIM Advanced Concept Test', true); return; }
+      const area = document.getElementById('iimAdvArea').value;
+      const module = document.getElementById('iimAdvModule').value;
+      const date = document.getElementById('iimAdvDate').value || todayISO();
+      const duration = Number(document.getElementById('iimAdvDuration').value||35);
+      entriesToAdd.push({ targetSheet:'Test_And_Targets_Log', date, sourceType:'2IIM Advanced Concept Test', sourceLabel:'2IIM Advanced', testName, area, topic: module, duration, totalQuestions:total, answered, unanswered, correct, incorrect, marksPerCorrect: mc, penaltyPerIncorrect: pi, netScore: finalScore });
+    }
+  } else { toast('Select a source first', true); return; }
+
+  // Resolve duplicates one at a time (needs the user's input each time), then fire
+  // the actual saves sequentially.
+  for(const entry of entriesToAdd){
+    const dup = findDuplicateTest(entry);
+    if(dup){
+      const choice = await askDuplicateChoice(`An entry already exists for ${describeTest(dup)}. Overwrite it, or add this as a separate new entry?`);
+      if(choice === 'cancel'){ toast('Save cancelled'); return; }
+      if(choice === 'overwrite'){ entry.action = 'update'; entry.rowId = dup._row; }
+    }
+  }
+
+  const btn = document.getElementById('trackerSubmitBtn');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Saving…';
+  try{
+    // Saved one at a time (not Promise.all) — multi-section Cracku submits used to
+    // fire all rows in parallel, which could race on the sheet and overwrite each
+    // other. The backend locks writes too, but sequential saves here keep it safe
+    // and give a clear error pointing at exactly which section failed.
+    for(const entry of entriesToAdd){ await apiPost(entry); }
+    await refreshAll(false);
+    toast(`Saved ${entriesToAdd.length} ${entriesToAdd.length>1?'entries':'entry'} to Sheet`);
+    trackerState = freshTrackerState();
+    renderPage();
+  }catch(err){ toast('Could not save: ' + err.message, true); btn.disabled=false; btn.textContent='Save entry'; }
+}
+
+document.addEventListener('DOMContentLoaded', ()=>{ bootPage(); });
+</script>
+</body>
+</html>

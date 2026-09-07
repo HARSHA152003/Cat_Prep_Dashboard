@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reading Log — CAT Prep Tracker</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="gate">
+  <div class="gate-card">
+    <h2>Not configured yet</h2>
+    <p>Set <code>CONFIG.API_URL</code> in <code>script.js</code> to your deployed Google Apps Script Web App URL (ending in <code>/exec</code>), then reload this page.</p>
+  </div>
+</div>
+
+<div id="appShell">
+  <div class="app-flex">
+    <aside id="sidebar">
+      <div class="brand">
+        <div class="mark">CP</div>
+        <div>
+          <div class="name">CAT Prep Tracker</div>
+          <div class="sub">LIVE SHEET SYNC</div>
+        </div>
+      </div>
+      <nav id="navlist"></nav>
+      <div class="sidebar-foot">
+        <div class="sync-row"><span class="dot" id="liveDot"></span><span id="syncStatus">Not synced yet</span></div>
+      </div>
+    </aside>
+
+    <div id="backdrop"></div>
+
+    <div class="main">
+      <div class="topbar">
+        <button id="menuBtn" aria-label="Toggle menu">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <div class="titles">
+          <h1 id="pageTitle">Reading Log</h1>
+          <div class="sub" id="pageSub">STAMINA</div>
+        </div>
+        <div class="topbar-actions">
+          <button class="btn btn-ghost btn-sm" id="refreshBtn">Refresh</button>
+        </div>
+      </div>
+      <div id="content"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"><span id="toastMsg"></span></div>
+
+<script src="script.js"></script>
+<script>
+function renderPage(){
+  const totalPages = DATA.reading.reduce((s,r)=>s+Number(r.pages||0),0);
+  const totalMins = DATA.reading.reduce((s,r)=>s+Number(r.minutes||0),0);
+  const velocity = totalMins>0 ? round1((totalPages/totalMins)*60) : 0;
+
+  let banner = '';
+  if(syncError) banner = `<div class="err-banner"><span>Last sync failed: ${escapeHtml(syncError)}. Showing most recent data.</span><button onclick="refreshAll(true)">Retry</button></div>`;
+
+  document.getElementById('content').innerHTML = banner + `
+    <div class="card">
+      <div class="card-h"><h3>Reading log</h3><span class="tag">STAMINA</span></div>
+      <form id="readForm">
+        <div class="grid2">
+          <div class="field"><label class="field-label">Date</label><input type="date" id="rd_date" value="${todayISO()}"></div>
+          <div class="field"><label class="field-label">Material type</label><select id="rd_type"><option value="Book">Book</option><option value="Newspaper">Newspaper</option></select></div>
+        </div>
+        <div id="rd_bookWrap">
+          <div class="field">
+            <label class="field-label">Book</label>
+            <div class="chip-row" style="margin-bottom:10px;">
+              <label class="chip"><input type="radio" name="rd_bookMode" value="new" checked> New book</label>
+              <label class="chip"><input type="radio" name="rd_bookMode" value="old"> Previously added book</label>
+            </div>
+            <input type="text" id="rd_bookNameNew" placeholder="Book name">
+            <select id="rd_bookNameOld" style="display:none;"></select>
+          </div>
+        </div>
+        <div id="rd_paperWrap" style="display:none;">
+          <div class="field"><label class="field-label">Newspaper name</label><input type="text" id="rd_paperName" placeholder="e.g. The Hindu"></div>
+        </div>
+        <div class="grid2">
+          <div class="field" id="rd_pagesField"><label class="field-label">Pages read</label><input type="number" id="rd_pages" min="0"></div>
+          <div class="field"><label class="field-label">Reading time (mins)</label><input type="number" id="rd_minutes" min="0" step="0.5"></div>
+        </div>
+        <button type="submit" class="btn btn-gold" id="readSubmitBtn">Save session</button>
+      </form>
+      <div class="hint" style="margin-top:14px;">Reading velocity so far: <strong class="num" style="color:var(--text)">${velocity}</strong> pages/hour</div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Reading history</h3></div>
+      <div class="table-scroll"><table><thead><tr><th>Date</th><th>Type</th><th>Name</th><th>Pages</th><th>Minutes</th><th>Pace (pg/hr)</th></tr></thead>
+      <tbody>${DATA.reading.length? [...DATA.reading].sort((a,b)=>b.date.localeCompare(a.date)).map(r=>`<tr><td>${fmtDate(r.date)}</td><td><span class="tag-pill">${r.materialType||'—'}</span></td><td style="white-space:normal;max-width:220px;">${escapeHtml(r.materialName)||'—'}</td><td class="num">${r.pages||0}</td><td class="num">${r.minutes}</td><td class="num">${r.minutes>0 && r.pages>0 ?round1((r.pages/r.minutes)*60):0}</td></tr>`).join('') : `<tr><td colspan="6" class="empty">No reading sessions yet.</td></tr>`}</tbody></table></div>
+    </div>`;
+
+  const typeSel = document.getElementById('rd_type');
+  const bookWrap = document.getElementById('rd_bookWrap');
+  const paperWrap = document.getElementById('rd_paperWrap');
+  const pagesField = document.getElementById('rd_pagesField');
+  const bookNameNew = document.getElementById('rd_bookNameNew');
+  const bookNameOld = document.getElementById('rd_bookNameOld');
+
+  function knownBooks(){
+    return [...new Set(DATA.reading.filter(r=>r.materialType==='Book' && r.materialName).map(r=>r.materialName))];
+  }
+  bookNameOld.innerHTML = knownBooks().length
+    ? knownBooks().map(b=>`<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join('')
+    : `<option value="">No previous books yet — add one as new</option>`;
+
+  function toggleType(){
+    const isBook = typeSel.value==='Book';
+    bookWrap.style.display = isBook ? 'block' : 'none';
+    paperWrap.style.display = isBook ? 'none' : 'block';
+    pagesField.style.display = isBook ? 'block' : 'none';
+  }
+  typeSel.addEventListener('change', toggleType); toggleType();
+
+  function toggleBookMode(){
+    const mode = document.querySelector('input[name="rd_bookMode"]:checked').value;
+    bookNameNew.style.display = mode==='new' ? 'block' : 'none';
+    bookNameOld.style.display = mode==='old' ? 'block' : 'none';
+  }
+  document.querySelectorAll('input[name="rd_bookMode"]').forEach(r=>r.addEventListener('change', toggleBookMode));
+  toggleBookMode();
+
+  document.getElementById('readForm').addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const isBook = typeSel.value==='Book';
+    let materialName = '';
+    if(isBook){
+      const mode = document.querySelector('input[name="rd_bookMode"]:checked').value;
+      materialName = mode==='new' ? bookNameNew.value.trim() : bookNameOld.value;
+      if(!materialName){ toast('Enter or select a book name', true); return; }
+    } else {
+      materialName = document.getElementById('rd_paperName').value.trim();
+      if(!materialName){ toast('Enter the newspaper name', true); return; }
+    }
+    const pages = isBook ? Number(document.getElementById('rd_pages').value||0) : 0;
+    const minutes = Number(document.getElementById('rd_minutes').value||0);
+    if(minutes<=0){ toast('Enter time spent reading', true); return; }
+    const payload = { targetSheet:'Reading_And_Vocab', date:document.getElementById('rd_date').value||todayISO(), materialType: typeSel.value, materialName, pages, minutes };
+    await saveWithDuplicateCheck(payload, findDuplicateReading, describeReading, 'Reading session saved to Sheet', document.getElementById('readSubmitBtn'));
+  });
+}
+window.renderPage = renderPage;
+
+document.addEventListener('DOMContentLoaded', ()=>{ bootPage(); });
+</script>
+</body>
+</html>

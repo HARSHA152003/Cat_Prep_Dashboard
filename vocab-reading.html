@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vocabulary &amp; Reading — CAT Prep Tracker</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="gate">
+  <div class="gate-card">
+    <h2>Not configured yet</h2>
+    <p>Set <code>CONFIG.API_URL</code> in <code>script.js</code> to your deployed Google Apps Script Web App URL (ending in <code>/exec</code>), then reload this page.</p>
+  </div>
+</div>
+
+<div id="appShell">
+  <div class="app-flex">
+    <aside id="sidebar">
+      <div class="brand">
+        <div class="mark">CP</div>
+        <div>
+          <div class="name">CAT Prep Tracker</div>
+          <div class="sub">LIVE SHEET SYNC</div>
+        </div>
+      </div>
+      <nav id="navlist"></nav>
+      <div class="sidebar-foot">
+        <div class="sync-row"><span class="dot" id="liveDot"></span><span id="syncStatus">Not synced yet</span></div>
+      </div>
+    </aside>
+
+    <div id="backdrop"></div>
+
+    <div class="main">
+      <div class="topbar">
+        <button id="menuBtn" aria-label="Toggle menu">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <div class="titles">
+          <h1 id="pageTitle">Vocabulary &amp; Reading</h1>
+          <div class="sub" id="pageSub">WORD BANK · LATEST SESSIONS</div>
+        </div>
+        <div class="topbar-actions">
+          <button class="btn btn-ghost btn-sm" id="refreshBtn">Refresh</button>
+        </div>
+      </div>
+      <div id="content"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"><span id="toastMsg"></span></div>
+
+<script src="script.js"></script>
+<script>
+function vocabRows(list){
+  if(!list.length) return `<tr><td colspan="3" class="empty">No words saved yet.</td></tr>`;
+  return [...list].sort((a,b)=>b.date.localeCompare(a.date)).map(v=>`<tr><td><strong>${escapeHtml(v.word)}</strong></td><td style="white-space:normal;max-width:420px;">${escapeHtml(v.meaning)}</td><td>${fmtDate(v.date)}</td></tr>`).join('');
+}
+function latestReadingRows(){
+  const latest = [...DATA.reading].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,10);
+  if(!latest.length) return `<tr><td colspan="5" class="empty">No reading sessions yet — head to the Reading Log page.</td></tr>`;
+  return latest.map(r=>`<tr><td>${fmtDate(r.date)}</td><td><span class="tag-pill">${r.materialType||'—'}</span></td><td style="white-space:normal;max-width:220px;">${escapeHtml(r.materialName)||'—'}</td><td class="num">${r.pages||0}</td><td class="num">${r.minutes}</td></tr>`).join('');
+}
+
+function renderPage(){
+  let banner = '';
+  if(syncError) banner = `<div class="err-banner"><span>Last sync failed: ${escapeHtml(syncError)}. Showing most recent data.</span><button onclick="refreshAll(true)">Retry</button></div>`;
+
+  document.getElementById('content').innerHTML = banner + `
+    <div class="card">
+      <div class="card-h"><h3>Add to vocabulary bank</h3><span class="tag">${DATA.vocab.length} WORDS</span></div>
+      <form id="vocabForm">
+        <div class="grid2">
+          <div class="field"><label class="field-label">Date</label><input type="date" id="vc_date" value="${todayISO()}"></div>
+          <div class="field"><label class="field-label">Word</label><input type="text" id="vc_word" placeholder="e.g. Ephemeral"></div>
+        </div>
+        <div class="field"><label class="field-label">Meaning &amp; context</label><textarea id="vc_meaning" placeholder="Meaning, and the sentence you found it in"></textarea></div>
+        <button type="submit" class="btn btn-gold" id="vocabSubmitBtn">Save word</button>
+      </form>
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Vocabulary bank</h3></div>
+      <input type="text" class="vocab-search" id="vocabSearch" placeholder="Search words…">
+      <div class="table-scroll"><table><thead><tr><th>Word</th><th>Meaning &amp; context</th><th>Date added</th></tr></thead><tbody id="vocabBody">${vocabRows(DATA.vocab)}</tbody></table></div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Latest reading sessions</h3><span class="tag">LAST 10 ENTRIES</span></div>
+      <div class="table-scroll"><table><thead><tr><th>Date</th><th>Type</th><th>Name</th><th>Pages</th><th>Minutes</th></tr></thead>
+      <tbody>${latestReadingRows()}</tbody></table></div>
+    </div>`;
+
+  document.getElementById('vocabForm').addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const word = document.getElementById('vc_word').value.trim();
+    const meaning = document.getElementById('vc_meaning').value.trim();
+    const date = document.getElementById('vc_date').value || todayISO();
+    if(!word){ toast('Enter a word', true); return; }
+    const payload = { targetSheet:'Reading_And_Vocab', date, word, meaning };
+    await saveWithDuplicateCheck(payload, findDuplicateVocab, describeVocab, 'Word saved to Sheet', document.getElementById('vocabSubmitBtn'));
+  });
+  document.getElementById('vocabSearch').addEventListener('input',(e)=>{
+    const q = e.target.value.toLowerCase();
+    const filtered = DATA.vocab.filter(v=>v.word.toLowerCase().includes(q) || v.meaning.toLowerCase().includes(q));
+    document.getElementById('vocabBody').innerHTML = vocabRows(filtered);
+  });
+}
+window.renderPage = renderPage;
+
+document.addEventListener('DOMContentLoaded', ()=>{ bootPage(); });
+</script>
+</body>
+</html>
