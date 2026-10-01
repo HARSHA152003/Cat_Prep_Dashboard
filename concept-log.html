@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Concept Study Log — CAT Prep Tracker</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="gate">
+  <div class="gate-card">
+    <h2>Not configured yet</h2>
+    <p>Set <code>CONFIG.API_URL</code> in <code>script.js</code> to your deployed Google Apps Script Web App URL (ending in <code>/exec</code>), then reload this page.</p>
+  </div>
+</div>
+
+<div id="appShell">
+  <div class="app-flex">
+    <aside id="sidebar">
+      <div class="brand">
+        <div class="mark">CP</div>
+        <div>
+          <div class="name">CAT Prep Tracker</div>
+          <div class="sub">LIVE SHEET SYNC</div>
+        </div>
+      </div>
+      <nav id="navlist"></nav>
+      <div class="sidebar-foot">
+        <div class="sync-row"><span class="dot" id="liveDot"></span><span id="syncStatus">Not synced yet</span></div>
+      </div>
+    </aside>
+
+    <div id="backdrop"></div>
+
+    <div class="main">
+      <div class="topbar">
+        <button id="menuBtn" aria-label="Toggle menu">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <div class="titles">
+          <h1 id="pageTitle">Concept Study Log</h1>
+          <div class="sub" id="pageSub">DEEP-WORK HOURS</div>
+        </div>
+        <div class="topbar-actions">
+          <button class="btn btn-ghost btn-sm" id="refreshBtn">Refresh</button>
+        </div>
+      </div>
+      <div id="content"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"><span id="toastMsg"></span></div>
+
+<script src="script.js"></script>
+<script>
+const STUDY_MODULES = {
+  Quant:['Arithmetic','Number Theory','Algebra','Modern Maths','Geometry & Mensuration'],
+  VARC:['Reading Comprehension','Verbal Reasoning','Vocabulary'],
+  DILR:['Data Interpretation','Logical Reasoning','Games & Tournaments'],
+};
+
+function rowStudy(r){ return `<tr><td>${fmtDate(r.date)}</td><td>${r.area}</td><td>${r.module}</td><td class="num">${r.hours}</td><td style="white-space:normal;max-width:280px;">${escapeHtml(r.notes)||'—'}</td></tr>`; }
+
+function renderPage(){
+  let banner = '';
+  if(syncError) banner = `<div class="err-banner"><span>Last sync failed: ${escapeHtml(syncError)}. Showing most recent data.</span><button onclick="refreshAll(true)">Retry</button></div>`;
+
+  document.getElementById('content').innerHTML = banner + `
+    <div class="card">
+      <div class="card-h"><h3>Log a study session</h3><span class="tag">DEEP-WORK HOURS</span></div>
+      <form id="studyForm">
+        <div class="grid3">
+          <div class="field"><label class="field-label">Date</label><input type="date" id="st_date" value="${todayISO()}"></div>
+          <div class="field"><label class="field-label">Subject area</label><select id="st_area">${Object.keys(STUDY_MODULES).map(a=>`<option value="${a}">${a}</option>`).join('')}</select></div>
+          <div class="field"><label class="field-label">Module / pillar</label><select id="st_module"></select></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label class="field-label">Hours spent</label><input type="number" id="st_hours" min="0" step="0.25" value="1.5" placeholder="e.g. 2.5"></div>
+          <div class="field"><label class="field-label">Specific topic / formulas</label><input type="text" id="st_notes" placeholder="e.g. Time-Speed-Distance — relative speed formulas"></div>
+        </div>
+        <button type="submit" class="btn btn-gold" id="studySubmitBtn">Save session</button>
+      </form>
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Study history</h3><span class="tag">${DATA.study.length} SESSIONS</span></div>
+      <div class="table-scroll"><table><thead><tr><th>Date</th><th>Area</th><th>Module</th><th>Hours</th><th>Notes</th></tr></thead>
+      <tbody>${DATA.study.length? [...DATA.study].sort((a,b)=>b.date.localeCompare(a.date)).map(rowStudy).join('') : `<tr><td colspan="5" class="empty">No study sessions logged yet.</td></tr>`}</tbody></table></div>
+    </div>`;
+
+  const areaSel = document.getElementById('st_area');
+  function fillModules(){ document.getElementById('st_module').innerHTML = STUDY_MODULES[areaSel.value].map(m=>`<option value="${m}">${m}</option>`).join(''); }
+  areaSel.addEventListener('change', fillModules); fillModules();
+
+  document.getElementById('studyForm').addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const hours = Number(document.getElementById('st_hours').value||0);
+    if(hours<=0){ toast('Enter hours spent', true); return; }
+    const payload = { targetSheet:'Concept_Study_Log', date:document.getElementById('st_date').value||todayISO(), area:areaSel.value, module:document.getElementById('st_module').value, hours, notes:document.getElementById('st_notes').value.trim() };
+    await saveWithDuplicateCheck(payload, findDuplicateStudy, describeStudy, 'Study session saved to Sheet', document.getElementById('studySubmitBtn'));
+  });
+}
+window.renderPage = renderPage;
+
+document.addEventListener('DOMContentLoaded', ()=>{ bootPage(); });
+</script>
+</body>
+</html>
